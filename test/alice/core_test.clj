@@ -8,8 +8,10 @@
 ;;;; by the Mozilla Public License, v. 2.0.
 (ns alice.core-test
   (:require [alice.core :refer :all]
+            [clojure.java.io :as io]
             [clojure.test :refer :all])
-  (:import (java.nio ByteBuffer)))
+  (:import (java.io ByteArrayInputStream ByteArrayOutputStream)
+           (java.nio ByteBuffer)))
 
 (deftest test-digest
   (is (= "8d777f385d3dfec8815d20f7496026dc"
@@ -26,3 +28,33 @@
 (deftest test-sha256
   (is (= "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
          (hexstr (sha256 "data")))))
+
+(deftest test-encrypting-decrypting
+  (let [key (aes-random-key 256)
+        in (.getBytes "data" "UTF-8")
+        baos (ByteArrayOutputStream.)]
+    (with-open [out (aes-encrypting-output-stream baos key)]
+      (io/copy in out))
+    (let [encrypted (.toByteArray baos)
+          out (ByteArrayOutputStream.)]
+      (is (not= "data" (String. encrypted "UTF-8")))
+      (with-open [in (-> encrypted
+                         io/input-stream
+                         (aes-decrypting-input-stream key))]
+        (io/copy in out))
+      (is (= "data" (String. (.toByteArray out) "UTF-8"))))))
+
+(deftest test-encrypting-input-stream
+  (let [key (aes-random-key 256)
+        bais (ByteArrayInputStream. (.getBytes "data" "UTF-8"))
+        out (ByteArrayOutputStream.)]
+    (with-open [in (aes-encrypting-input-stream bais key)]
+      (io/copy in out))
+    (let [encrypted (.toByteArray out)
+          out (ByteArrayOutputStream.)]
+      (is (not= "data" (String. encrypted "UTF-8")))
+      (with-open [in (-> encrypted
+                         io/input-stream
+                         (aes-decrypting-input-stream key))]
+        (io/copy in out))
+      (is (= "data" (String. (.toByteArray out) "UTF-8"))))))

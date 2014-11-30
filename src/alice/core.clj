@@ -8,10 +8,15 @@
 ;;;; by the Mozilla Public License, v. 2.0.
 (ns alice.core
   (:require [clojure.java.io :as io]
+            [clojure.stacktrace]
             [nio.core :as nio])
-  (:import (java.io File)
+  (:import (java.io ByteArrayInputStream ByteArrayOutputStream File
+                    FilterInputStream FilterOutputStream IOException
+                    InputStream OutputStream SequenceInputStream)
            (java.nio ByteBuffer)
-           (java.security MessageDigest)))
+           (java.security Key MessageDigest SecureRandom)
+           (javax.crypto Cipher CipherInputStream CipherOutputStream Mac)
+           (javax.crypto.spec IvParameterSpec SecretKeySpec)))
 
 (defprotocol Hexstr
   (hexstr [this]))
@@ -69,3 +74,52 @@
 (defn sha256
   [obj & {:as opts}]
   (digest obj "SHA-256" opts))
+
+(defn random-bytes
+  [length algorithm]
+  (let [bytes (byte-array length)]
+    (.nextBytes (SecureRandom/getInstance algorithm) bytes)
+    bytes))
+
+(defn sha1prng-random-bytes
+  {:tag 'bytes}
+  [length]
+  (random-bytes length "SHA1PRNG"))
+
+(defn aes-random-key
+  [bits]
+  (SecretKeySpec. (sha1prng-random-bytes (/ bits 8)) "AES"))
+
+(defn aes-encrypting-output-stream
+  {:tag java.io.OutputStream}
+  ([^OutputStream out key]
+     (let [iv (sha1prng-random-bytes 16)]
+       (.write out iv)
+       (aes-encrypting-output-stream out key iv)))
+  ([^OutputStream out ^Key key ^bytes iv]
+     (let [cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")]
+       (.init cipher Cipher/ENCRYPT_MODE key (IvParameterSpec. iv))
+       (CipherOutputStream. out cipher))))
+
+(defn aes-encrypting-input-stream
+  {:tag java.io.InputStream}
+  ([^InputStream in key]
+     (let [iv (sha1prng-random-bytes 16)]
+       (SequenceInputStream.
+        (ByteArrayInputStream. iv)
+        (aes-encrypting-input-stream in key iv))))
+  ([^InputStream in ^Key key ^bytes iv]
+     (let [cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")]
+       (.init cipher Cipher/ENCRYPT_MODE key (IvParameterSpec. iv))
+       (CipherInputStream. in cipher))))
+
+(defn aes-decrypting-input-stream
+  {:tag java.io.InputStream}
+  ([^InputStream in key]
+     (let [iv (byte-array 16)]
+       (.read in iv)
+       (aes-decrypting-input-stream in key iv)))
+  ([^InputStream in ^Key key ^bytes iv]
+     (let [cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")]
+       (.init cipher Cipher/DECRYPT_MODE key (IvParameterSpec. iv))
+       (CipherInputStream. in cipher))))
